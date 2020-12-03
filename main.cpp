@@ -1,15 +1,3 @@
-// socketing
-#include <string.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <arpa/inet.h>
-#include <netinet/in.h>
-#include <netinet/tcp.h>
-#include <netdb.h>
-#include <unistd.h>
-
 // parsing
 #include <iostream>
 #include <fstream>
@@ -19,24 +7,9 @@
 #include <thread>
 using namespace date;
 
-// globals
-#define PortNumber 1200
-#define MaxConnects 8
-#define BuffSize 256
-#define ConversationLen    3
-#define Host "localhost"
 
-
-
-
-
-
-
-
-void report(const char* msg, int terminate) {
-    perror(msg);
-    if (terminate) exit(-1); /* failure */
-}
+// condition variables
+// ring buffer or a SPSC queue
 
 
 // timepoint based on internal highres with duration component that is the milliseconds preset
@@ -62,118 +35,83 @@ void parse_line_to_individual_strings(std::string &line, std::vector<std::string
 }
 
 
-bool send_over_tcp(std::string m, int socket_file_descriptor){
-    bool res = write(socket_file_descriptor, &m[0], strlen(&m[0])) > 0;
-    return res;
-};
-
-void send_and_receive_echo_over_tcp(std::string m, int socket_file_descriptor){
-    bool arrived = send_over_tcp(m, socket_file_descriptor);
-    if(arrived){
-        char buffer[BuffSize + 1];
-        memset(buffer, '\0', sizeof(buffer));
-        if (read(socket_file_descriptor, buffer, sizeof(buffer)) > 0)
-            puts(buffer);
-    }
-};
 
 struct guardedvector {
     std::mutex guard;
     std::vector<std::string> myvector;
 };
 
+// ideal architecture:
+// non timed threaded loop reads in lines and dumps chunks into array of limited size
+// timed threaded sender sends via tcp
+// if array limit (max total chunks) reached, pause readline. Continue to empty array via sending
+
+struct Buffer{
+
+};
 
 
+void readlines_2(std::string filename, int timestamp_id, int max_chunk_size, Buffer buffer, std::condition_variable event_alive, std::condition_variable event_buffer_data_empty, std::condition_variable event_buffer_data_full){
 
-int main() {
+}
 
+void sendlines(Buffer buffer, std::condition_variable event_buffer_data_empty, std::condition_variable event_buffer_data_full, float time_scale=1.0){
 
-    /* file descriptor for the socket */
-    int socket_file_descriptor = socket(
-            AF_INET,      /* versus AF_LOCAL */
-            SOCK_STREAM,  /* reliable, bidirectional */
-            0);           /* system picks protocol (TCP) */
-    if (socket_file_descriptor < 0) report("socket", 1); /* terminate */
-
-    /* get the address of the host */
-    struct hostent* hptr = gethostbyname(Host); /* localhost: 127.0.0.1 */
-    if (!hptr) report("gethostbyname", 1); /* is hptr NULL? */
-    if (hptr->h_addrtype != AF_INET)       /* versus AF_LOCAL */
-        report("bad address family", 1);
-
-    /* connect to the server: configure server's address 1st */
-    struct sockaddr_in saddr;
-    memset(&saddr, 0, sizeof(saddr));
-    saddr.sin_family = AF_INET;
-    saddr.sin_addr.s_addr =
-            ((struct in_addr*) hptr->h_addr_list[0])->s_addr;
-    saddr.sin_port = htons(PortNumber); /* port number in big-endian */
-
-    if (connect(socket_file_descriptor, (struct sockaddr*) &saddr, sizeof(saddr)) < 0)
-        report("connect", 1);
-
-
-    //////////////////////////
-
-
-    int timestamp_id = 1;
-    int yearstamp_id = 0;
-    int max_chunk = 100;
-    float time_scale = 1.0;
-    std::string UDP_IP = "127.0.0.1";
-    int UDP_PORT = 5005;
-    std::string csv_path = "sample.csv";
-    bool wait = false;
+}
 
 
 
 
 
+
+// void readlines(std::fstream &infile, int max_chunk, guardedvector &v, int timestamp_id,  int yearstamp_id){
+// void readlines(std::string filename, int max_chunk, std::vector<std::string> &v, int timestamp_id,  int yearstamp_id){
+void readlines(std::string filename, int max_chunk, guardedvector &v, int timestamp_id,  int yearstamp_id){
     // init reader
-    std::string filename = "/Users/estebanlanter/PycharmProjects/LimitOrderBook/equity_full_depth_0930_1600.csv";
     std::fstream infile(filename);
     char buffer[65536];
     infile.rdbuf()->pubsetbuf(buffer, sizeof(buffer));
+    // current line
     std::string line;
+    // splitted string of the current raw line
     std::vector<std::string> splittedString;
 
-
-    // init sender
-     std::vector<std::string> chunk(max_chunk);
-
-    // init timing control
-    std::string current_packet_timestamp_raw;
+    bool reading = true;
+    // string timestamp of next packet
     std::string next_packet_timestamp_raw;
-    std::chrono::milliseconds delta_dat(0);
-    std::chrono::milliseconds wait_for(0);
+    // chunk of strings to be concatenated
+    std::vector<std::string> chunk(max_chunk);
+    // duration, duration since we registered the last timestep in the file
     std::chrono::milliseconds time_passed_since_sending_last_timestep(0);
-    std::chrono::time_point<std::chrono::system_clock, std::chrono::milliseconds> current_packet_timestamp_tp;
-    std::chrono::time_point<std::chrono::system_clock, std::chrono::milliseconds> next_packet_timestamp_tp;
+    // duration of time passed since last send
+    std::chrono::milliseconds delta_dat(0);
+    // duration of how long we actually wait, if at all
+    std::chrono::milliseconds wait_for(0);
+    // timepoint at which we registered the last timstep
     std::chrono::time_point<std::chrono::system_clock, std::chrono::milliseconds> time_at_last_timestep_tp;
+    // timepiont - absolute time of current line
+    std::chrono::time_point<std::chrono::system_clock, std::chrono::milliseconds> current_packet_timestamp_tp;
+    // timepiont - absolute time of next line
+    std::chrono::time_point<std::chrono::system_clock, std::chrono::milliseconds> next_packet_timestamp_tp;
 
     // pre-loop
     getline(infile, line);
     std::cout << "header: " << line <<::std::endl;
     getline(infile, line);
-    std::cout << "First raw line: " << line <<::std::endl;
     parse_line_to_individual_strings(line, splittedString);
-    current_packet_timestamp_raw = splittedString[yearstamp_id] + " " + splittedString[timestamp_id]; // convert this to a timepoint!
 
 
     // parse string to tp
+    std::string current_packet_timestamp_raw;
+    current_packet_timestamp_raw = splittedString[yearstamp_id] + " " + splittedString[timestamp_id]; // convert this to a timepoint!
     std::stringstream ss_raw(current_packet_timestamp_raw);
     ss_raw >> parse("%Y%m%d %H:%M:%S", current_packet_timestamp_tp);
     std::cout << "First timestamp: " << current_packet_timestamp_tp <<::std::endl;
 
-    // send...
+    // last prep
     time_at_last_timestep_tp = get_current_timepoint();
 
 
-
-    /* Write some stuff and read the echoes. */
-    puts("Connect to server, about to write some stuff...");
-
-    bool reading = true;
     while(reading){
         chunk.push_back(line);
         while (getline(infile, line)) {
@@ -196,8 +134,6 @@ int main() {
             ss_loop >> parse("%Y%m%d %H:%M:%S", next_packet_timestamp_tp);
             std::cout << "next packet timestamp: " << next_packet_timestamp_tp <<::std::endl;
 
-            // measure passed time duration the last timepoint in the data
-
             // check if we are still in same time point and if the chunk is not filled
             if(next_packet_timestamp_tp==current_packet_timestamp_tp && chunk.size()<max_chunk){
                 chunk.push_back(line);
@@ -206,8 +142,13 @@ int main() {
                 std::cout<<"max chunk size reached, sending"<<std::endl;
                 // parse to string
                 std::string m = chunk_to_message(chunk);
-                // send over tcp
-                //send_over_tcp(m, socket_file_descriptor);
+
+                // send to buffer
+                v.guard.lock();
+                v.myvector.push_back(m);
+                v.guard.unlock();
+//                v.push_back(m);
+
                 // register time
                 time_at_last_timestep_tp = get_current_timepoint();
                 chunk.clear();
@@ -216,8 +157,13 @@ int main() {
                 // purge data
                 // parse to string
                 std::string m = chunk_to_message(chunk);
-                // send over tcp
-                //send_over_tcp(m, socket_file_descriptor);
+
+                // send to buffer
+                v.guard.lock();
+                v.myvector.push_back(m);
+                v.guard.unlock();
+//                v.push_back(m);
+
                 // register time
                 time_at_last_timestep_tp = get_current_timepoint();
                 chunk.clear();
@@ -227,8 +173,13 @@ int main() {
                 // purge data
                 // parse to string
                 std::string m = chunk_to_message(chunk);
-                // send over tcp
-                //send_over_tcp(m, socket_file_descriptor);
+
+                // send to buffer
+                v.guard.lock();
+                v.myvector.push_back(m);
+                v.guard.unlock();
+//                v.push_back(m);
+
                 // register time
                 time_at_last_timestep_tp = get_current_timepoint();
                 chunk.clear();
@@ -248,8 +199,6 @@ int main() {
                 std::this_thread::sleep_for(wait_for);
             }
 
-
-
             // we've reached the next timestep
             // we calculate how long we have time now to send the current timestep
             delta_dat = next_packet_timestamp_tp - current_packet_timestamp_tp;
@@ -259,6 +208,37 @@ int main() {
             current_packet_timestamp_tp = next_packet_timestamp_tp;
         }
     }
+    return;
+}
+
+
+
+
+int main() {
+
+    int timestamp_id = 1;
+    int yearstamp_id = 0;
+    int max_chunk = 100;
+    float time_scale = 1.0;
+    std::string UDP_IP = "127.0.0.1";
+    int UDP_PORT = 5005;
+    std::string csv_path = "sample.csv";
+    bool wait = false;
+
+    // init reader
+    std::string filename = "/Users/estebanlanter/PycharmProjects/LimitOrderBook/equity_full_depth_0930_1600.csv";
+
+
+    /* Write some stuff and read the echoes. */
+    puts("Connect to server, about to write some stuff...");
+
+//    std::vector<std::string> v;
+//    std::thread test(readlines, filename, max_chunk, std::ref(v), timestamp_id,  yearstamp_id);
+//    test.join();
+
+    guardedvector v;
+    std::thread test(readlines, filename, max_chunk, std::ref(v), timestamp_id,  yearstamp_id);
+    test.join();
 
 }
 

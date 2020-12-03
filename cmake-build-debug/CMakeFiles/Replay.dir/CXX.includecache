@@ -57,26 +57,6 @@ type_traits
 -
 
 /Users/estebanlanter/CLionProjects/Replay/main.cpp
-string.h
--
-stdio.h
--
-stdlib.h
--
-sys/types.h
--
-sys/socket.h
--
-arpa/inet.h
--
-netinet/in.h
--
-netinet/tcp.h
--
-netdb.h
--
-unistd.h
--
 iostream
 -
 fstream
