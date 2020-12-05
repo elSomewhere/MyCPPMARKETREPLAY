@@ -2,40 +2,20 @@
 #include <iostream>
 #include <fstream>
 #include <vector>
-#include <sstream>
 #include "Date/date.h"
 #include <thread>
-using namespace date;
-
-
-// ideal architecture:
-// non timed threaded loop reads in lines and dumps chunks into array of limited size
-// timed threaded sender sends via tcp
-// if array limit (max total chunks) reached, pause readline. Continue to empty array via sending
-
-// condition variables
-// ring buffer or a SPSC queue
-
-
-// timepoint based on internal highres with duration component that is the milliseconds preset
-
 #include <atomic>
-#include <thread>
 #include <mutex>
-#include <condition_variable>
-
 #include <stdexcept>
-#include <iostream>
 #include <list>
-#include <vector>
 #include <queue>
 
 
+using namespace date;
 
 
 
-
-
+// from: https://morestina.net/blog/1400/minimalistic-blocking-bounded-queue-for-c
 template<typename T>
 class queue {
     std::deque<T> content;
@@ -98,11 +78,6 @@ public:
 };
 
 
-
-
-
-
-
 // intermediate type for the loop
 struct timed_chunk{
     std::vector<std::string> chunk;
@@ -118,7 +93,7 @@ struct Message{
 
 
 
-//// make a template instead of holding messages with std::String
+// make a template instead of holding messages with std::String
 class Buffer
 {
 public:
@@ -141,27 +116,6 @@ private:
 
 
 
-//// make a template instead of holding messages with std::String
-//class Buffer
-//{
-//public:
-//    void push(std::string const & v, std::chrono::time_point<std::chrono::system_clock, std::chrono::milliseconds> last_timestamp){
-//        std::chrono::milliseconds delta_t = last_timestamp - tail_time;
-//        Message message{v, delta_t};
-//        buf.push(message);
-//        tail_time = last_timestamp;
-//    }
-//    Message pop(Message &m){
-//        buf.pop();
-//    }
-//
-//private:
-//    std::queue<Message> buf;
-//    std::chrono::time_point<std::chrono::system_clock, std::chrono::milliseconds> tail_time;
-//};
-
-
-
 std::chrono::time_point<std::chrono::system_clock, std::chrono::milliseconds> get_current_timepoint(){
     return std::chrono::time_point_cast<std::chrono::milliseconds>(std::chrono::system_clock::now());
 }
@@ -175,7 +129,6 @@ std::string chunk_to_rawbytes(std::vector<std::string> &chunk){
 }
 
 
-// OK
 void parse_line_to_individual_strings(std::string &line, std::vector<std::string> &splittedStringArray){
     splittedStringArray.clear();
     size_t last = 0, pos = 0;
@@ -187,7 +140,6 @@ void parse_line_to_individual_strings(std::string &line, std::vector<std::string
 }
 
 
-// OK
 std::chrono::time_point<std::chrono::system_clock, std::chrono::milliseconds> get_timestamp_from_line(std::string &line, std::vector<std::string> &splittedString, int yearstamp_id, int timestamp_id){
     // parse string to tp
     std::chrono::time_point<std::chrono::system_clock, std::chrono::milliseconds> res;
@@ -293,7 +245,6 @@ void readlines(std::string filename, int timestamp_id, int yearstamp_id, int max
 
 
 void sendlines(Buffer &buff, float time_scale=1.0){
-//    //TODO
     std::chrono::time_point<std::chrono::system_clock, std::chrono::milliseconds> time_at_last_sent_message = get_current_timepoint();
     std::chrono::milliseconds next_message_delta;
     std::chrono::milliseconds time_passed_since_last_send_op;
@@ -339,26 +290,43 @@ std::chrono::time_point<std::chrono::system_clock, std::chrono::milliseconds> pe
 }
 
 
+//// should consume: filepath, regex date format string, optional number for timestamp column - default = 0, max_chunk_size=64, max_buff_size=1024
+//class App {
+//public:
+//    App(std::string filepath, std::string date_formatter, int time_column, int max_chunk_size, int max_buff_size):
+//            filepath(filepath), date_formatter(date_formatter), time_column(time_column), max_chunk_size(max_chunk_size), max_buff_size(max_buff_size){
+//        std::chrono::time_point<std::chrono::system_clock, std::chrono::milliseconds> last_timestamp = peek_first_datepoint_from_file(filepath, time_column);
+//        // the buffer communicating between reader and sender
+//        Buffer buff(max_buff_size, last_timestamp);
+//    };
+//
+//private:
+//    const std::string filepath;
+//    const std::string date_formatter;
+//    const int time_column;
+//    const int max_chunk_size;
+//    const int max_buff_size;
+//};
 
 
 int main() {
-
+    // vars
     int timestamp_id = 1;
     int yearstamp_id = 0;
     int max_chunk_size = 1000;
     int max_buff_size = 1000;
     float time_scale = 1.0;
+    // file path
     std::string filename = "/Users/estebanlanter/PycharmProjects/LimitOrderBook/equity_full_depth_0930_1600.csv";
     std::chrono::time_point<std::chrono::system_clock, std::chrono::milliseconds> last_timestamp = peek_first_datepoint_from_file(filename, yearstamp_id, timestamp_id);
     // the buffer communicating between reader and sender
     Buffer buff(max_buff_size, last_timestamp);
     //start threads
     std::thread test1(readlines, filename, timestamp_id, yearstamp_id,  max_chunk_size, std::ref(buff));
-    std::thread test2(sendlines, std::ref(buff), 1.0);
+    std::thread test2(sendlines, std::ref(buff), time_scale);
     //readlines(filename, timestamp_id, yearstamp_id, max_chunk_size, buff);
     //sendlines(buff, 1.0);
     test1.join();
     test2.join();
     return 0;
-
 }
